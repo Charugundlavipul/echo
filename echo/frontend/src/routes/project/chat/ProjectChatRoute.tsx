@@ -24,12 +24,17 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router";
-import { ChatAccordionItemMenu, ChatModeIndicator } from "@/components/chat/ChatAccordion";
-import { MODE_COLORS } from "@/components/chat/ChatModeSelector";
+import {
+	ChatAccordionItemMenu,
+	ChatModeIndicator,
+} from "@/components/chat/ChatAccordion";
 import { ChatContextProgress } from "@/components/chat/ChatContextProgress";
 import { ChatHistoryMessage } from "@/components/chat/ChatHistoryMessage";
 import { ChatMessage } from "@/components/chat/ChatMessage";
-import { ChatModeSelector } from "@/components/chat/ChatModeSelector";
+import {
+	ChatModeSelector,
+	MODE_COLORS,
+} from "@/components/chat/ChatModeSelector";
 import { ChatTemplatesMenu } from "@/components/chat/ChatTemplatesMenu";
 import {
 	extractMessageMetadata,
@@ -54,6 +59,8 @@ import { useConversationsCountByProjectId } from "@/components/conversation/hook
 import { API_BASE_URL, ENABLE_CHAT_AUTO_SELECT } from "@/config";
 import { useElementOnScreen } from "@/hooks/useElementOnScreen";
 import { useLanguage } from "@/hooks/useLanguage";
+import { useLoadNotification } from "@/hooks/useLoadNotification";
+import { testId } from "@/lib/testUtils";
 
 const useDembraneChat = ({ chatId }: { chatId: string }) => {
 	const chatHistoryQuery = useChatHistory(chatId);
@@ -106,6 +113,7 @@ const useDembraneChat = ({ chatId }: { chatId: string }) => {
 		error,
 		stop,
 		reload,
+		data,
 	} = useChat({
 		api: `${API_BASE_URL}/chats/${chatId}?language=${iso639_1 ?? "en"}`,
 		credentials: "include",
@@ -162,6 +170,15 @@ const useDembraneChat = ({ chatId }: { chatId: string }) => {
 			}
 		},
 		streamProtocol: "data",
+	});
+
+	// Handle load status (shows inline message when backend reports high load)
+	const hasContent =
+		messages.length > 0 && messages[messages.length - 1]?.content?.length > 0;
+	const { statusMessage } = useLoadNotification({
+		data,
+		hasContent,
+		isLoading,
 	});
 
 	const customHandleStop = () => {
@@ -267,6 +284,7 @@ const useDembraneChat = ({ chatId }: { chatId: string }) => {
 		setTemplateKey,
 		showProgress,
 		status,
+		statusMessage,
 		stop: customHandleStop,
 		templateKey,
 	};
@@ -302,17 +320,16 @@ export const ProjectChatRoute = () => {
 	const prefetchSuggestions = usePrefetchSuggestions();
 
 	// Track conversation count for deep_dive mode to trigger suggestions refetch
-	const conversationCount =
-		chatContextQuery.data?.conversations?.length ?? 0;
+	const conversationCount = chatContextQuery.data?.conversations?.length ?? 0;
 	const prevConversationCountRef = useRef<number | null>(null);
 
 	// Fetch suggestions:
 	// - Overview mode: Fetch immediately when mode is selected
 	// - Deep dive mode: Only fetch after conversations are added (not on initial load)
-	const shouldFetchSuggestions = isModeSelected && (
-		!isDeepDiveMode || // overview mode: always fetch
-		conversationCount > 0 // deep_dive mode: only when conversations exist
-	);
+	const shouldFetchSuggestions =
+		isModeSelected &&
+		(!isDeepDiveMode || // overview mode: always fetch
+			conversationCount > 0); // deep_dive mode: only when conversations exist
 
 	const suggestionsQuery = useChatSuggestions(chatId ?? "", {
 		enabled: shouldFetchSuggestions,
@@ -344,7 +361,14 @@ export const ProjectChatRoute = () => {
 				suggestionsQuery.refetch();
 			}
 		}
-	}, [conversationCount, isDeepDiveMode, chatId, language, queryClient, suggestionsQuery]);
+	}, [
+		conversationCount,
+		isDeepDiveMode,
+		chatId,
+		language,
+		queryClient,
+		suggestionsQuery,
+	]);
 
 	const {
 		isInitializing,
@@ -366,6 +390,7 @@ export const ProjectChatRoute = () => {
 		progressValue,
 		templateKey,
 		setTemplateKey,
+		statusMessage,
 	} = useDembraneChat({ chatId: chatId ?? "" });
 
 	// check if assistant is typing by determining if the last message is an assistant message and has a text part
@@ -470,12 +495,17 @@ export const ProjectChatRoute = () => {
 	}
 
 	return (
-		<Stack className="relative flex min-h-full flex-col px-2 pr-4">
+		<Stack
+			className="relative flex min-h-full flex-col px-2 pr-4"
+			{...testId("chat-interface")}
+		>
 			{/* Header */}
 			<Stack className="top-0 w-full pt-6">
 				<Group justify="space-between">
 					<Group gap="sm">
-						<Title order={1}>{chatQuery.data?.name ?? t`Chat`}</Title>
+						<Title order={1} {...testId("chat-title")}>
+							{chatQuery.data?.name ?? t`Chat`}
+						</Title>
 						{chatMode && <ChatModeIndicator mode={chatMode} size="sm" />}
 					</Group>
 					<Group>
@@ -551,25 +581,39 @@ export const ProjectChatRoute = () => {
 					)}
 
 					{isLoading && !showProgress && (
-						<Group>
-							<Box className="animate-spin">
-								<Logo hideTitle h="20px" my={4} />
-							</Box>
-							<Text size="sm" className="italic">
-								<Trans>
-									{isAssistantTyping ? "Assistant is typing..." : "Thinking..."}
-								</Trans>
-							</Text>
-							<Button
-								onClick={() => stop()}
-								variant="outline"
-								color="gray"
-								size="sm"
-								rightSection={<IconSquare size={14} />}
-							>
-								<Trans>Stop</Trans>
-							</Button>
-						</Group>
+						<Stack gap="xs">
+							<Group>
+								<Box className="animate-spin">
+									<Logo hideTitle h="20px" my={4} />
+								</Box>
+								<Text
+									size="sm"
+									className="italic"
+									{...testId("chat-thinking-text")}
+								>
+									<Trans>
+										{isAssistantTyping
+											? "Assistant is typing..."
+											: "Thinking..."}
+									</Trans>
+								</Text>
+								<Button
+									onClick={() => stop()}
+									variant="outline"
+									color="gray"
+									size="sm"
+									rightSection={<IconSquare size={14} />}
+									{...testId("chat-stop-button")}
+								>
+									<Trans>Stop</Trans>
+								</Button>
+							</Group>
+							{statusMessage && (
+								<Text size="sm" c="dimmed">
+									{statusMessage}
+								</Text>
+							)}
+						</Stack>
 					)}
 
 					{messages &&
@@ -592,6 +636,7 @@ export const ProjectChatRoute = () => {
 							title="Error"
 							color="red"
 							variant="outline"
+							{...testId("chat-error-alert")}
 						>
 							<Text>
 								<Trans>An error occurred.</Trans>
@@ -601,6 +646,7 @@ export const ProjectChatRoute = () => {
 								onClick={() => reload()}
 								leftSection={<IconRefresh size="1rem" />}
 								mt="md"
+								{...testId("chat-retry-button")}
 							>
 								<Trans>Retry</Trans>
 							</Button>
@@ -613,7 +659,10 @@ export const ProjectChatRoute = () => {
 			<div ref={scrollTargetRef} aria-hidden="true" />
 
 			{/* Footer */}
-			<Box className="bottom-0 w-full pb-2 pt-4 md:sticky" style={{ backgroundColor: "var(--app-background)" }}>
+			<Box
+				className="bottom-0 w-full pb-2 pt-4 md:sticky"
+				style={{ backgroundColor: "var(--app-background)" }}
+			>
 				<Stack className="pb-2">
 					{/* Scroll to bottom button */}
 					<Group
@@ -644,6 +693,7 @@ export const ProjectChatRoute = () => {
 								title={t`Please select conversations from the sidebar to proceed`}
 								color="orange"
 								variant="light"
+								{...testId("chat-no-conversations-alert")}
 							/>
 						)}
 
@@ -651,7 +701,7 @@ export const ProjectChatRoute = () => {
 						// biome-ignore lint/a11y/useValidAriaRole: this is not an ARIA attribute
 						<ChatMessage role="dembrane">
 							<Group gap="xs" align="baseline">
-								<Text size="xs">
+								<Text size="xs" c="dimmed" fw={500} px="sm">
 									<Trans>Adding Context:</Trans>
 								</Text>
 								<ConversationLinks
@@ -705,6 +755,7 @@ export const ProjectChatRoute = () => {
 										}
 									}}
 									color="gray"
+									{...testId("chat-input-textarea")}
 								/>
 								<Group
 									justify="space-between"
@@ -734,6 +785,7 @@ export const ProjectChatRoute = () => {
 										}}
 										rightSection={<IconSend size={24} />}
 										disabled={input.trim() === "" || isLoading || isSubmitting}
+										{...testId("chat-send-button")}
 									>
 										<Trans>Send</Trans>
 									</Button>

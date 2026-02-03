@@ -22,6 +22,9 @@ import { useParams } from "react-router";
 import { FormLabel } from "@/components/form/FormLabel";
 import { useInfiniteProjects } from "@/components/project/hooks";
 import { useI18nNavigate } from "@/hooks/useI18nNavigate";
+import { analytics } from "@/lib/analytics";
+import { AnalyticsEvents as events } from "@/lib/analyticsEvents";
+import { testId } from "@/lib/testUtils";
 import { useMoveConversationMutation } from "./hooks";
 
 export const MoveConversationButton = ({
@@ -73,6 +76,12 @@ export const MoveConversationButton = ({
 
 	const handleMove = handleSubmit((data) => {
 		if (!data.targetProjectId) return;
+
+		try {
+			analytics.trackEvent(events.MOVE_TO_ANOTHER_PROJECT);
+		} catch (error) {
+			console.warn("Analytics tracking failed:", error);
+		}
 
 		moveConversationMutation.mutate(
 			{
@@ -126,6 +135,7 @@ export const MoveConversationButton = ({
 				variant="outline"
 				color="primary"
 				rightSection={<IconArrowsExchange size={16} />}
+				{...testId("conversation-move-button")}
 			>
 				<Group>
 					<Badge>
@@ -135,7 +145,12 @@ export const MoveConversationButton = ({
 				</Group>
 			</Button>
 
-			<Modal opened={opened} onClose={close} title={t`Move Conversation`}>
+			<Modal
+				opened={opened}
+				onClose={close}
+				title={t`Move Conversation`}
+				{...testId("conversation-move-modal")}
+			>
 				<form onSubmit={handleMove}>
 					<Stack gap="3rem">
 						<Stack gap="md">
@@ -145,6 +160,7 @@ export const MoveConversationButton = ({
 								leftSection={<IconSearch size={16} />}
 								value={search}
 								onChange={(e) => setSearch(e.currentTarget.value)}
+								{...testId("conversation-move-search-input")}
 							/>
 
 							<Divider />
@@ -182,7 +198,13 @@ export const MoveConversationButton = ({
 																	: undefined
 															}
 														>
-															<Radio value={project.id} label={project.name} />
+															<Radio
+																value={project.id}
+																label={project.name}
+																{...testId(
+																	`conversation-move-project-radio-${project.id}`,
+																)}
+															/>
 														</div>
 													))}
 													{projectsQuery.isFetchingNextPage && (
@@ -204,6 +226,7 @@ export const MoveConversationButton = ({
 								onClick={close}
 								disabled={moveConversationMutation.isPending}
 								type="button"
+								{...testId("conversation-move-cancel-button")}
 							>
 								{t`Cancel`}
 							</Button>
@@ -214,6 +237,7 @@ export const MoveConversationButton = ({
 									!dirtyFields.targetProjectId ||
 									moveConversationMutation.isPending
 								}
+								{...testId("conversation-move-submit-button")}
 							>
 								{t`Move`}
 							</Button>

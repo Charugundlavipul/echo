@@ -13,10 +13,12 @@ sections and exposes a friendly, typed surface area for the rest of the app.
 
 from __future__ import annotations
 
+import os
+import re
 import json
 import base64
 import logging
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Tuple, Literal, Optional
 from pathlib import Path
 from functools import lru_cache
 
@@ -89,9 +91,7 @@ class LLMProviderConfig(BaseModel):
 
     @field_validator("vertex_credentials", mode="before")
     @classmethod
-    def parse_vertex_credentials(
-        cls, value: Optional[Any]
-    ) -> Optional[Dict[str, Any]]:
+    def parse_vertex_credentials(cls, value: Optional[Any]) -> Optional[Dict[str, Any]]:
         return _coerce_service_account(value)
 
     @field_validator("gcp_sa_json", mode="before")
@@ -126,6 +126,77 @@ class LLMSettings(BaseSettings):
     multi_modal_pro: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
     multi_modal_fast: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
     text_fast: LLMProviderConfig = Field(default_factory=LLMProviderConfig)
+
+    def get_deployments_for_group(
+        self, group: str
+    ) -> List[Tuple[Optional[int], LLMProviderConfig]]:
+        """
+        Discover all deployments for a model group (e.g., 'text_fast').
+
+        Looks for environment variables matching:
+        - LLM__TEXT_FAST__* (primary, suffix=None)
+        - LLM__TEXT_FAST_1__* (fallback 1, suffix=1)
+        - LLM__TEXT_FAST_2__* (fallback 2, suffix=2)
+        - etc.
+
+        Returns a list of (suffix, LLMProviderConfig) tuples sorted by suffix.
+        suffix=None for primary, 1 for _1, 2 for _2, etc.
+        """
+        deployments: List[Tuple[Optional[int], LLMProviderConfig]] = []
+        group_upper = group.upper()
+
+        # Collect all suffixes found in environment
+        # Pattern: LLM__TEXT_FAST__* or LLM__TEXT_FAST_N__*
+        suffix_pattern = re.compile(rf"^LLM__{group_upper}(?:_(\d+))?__(\w+)$", re.IGNORECASE)
+
+        # Group env vars by suffix
+        suffix_vars: Dict[Optional[int], Dict[str, str]] = {}
+        for key, value in os.environ.items():
+            match = suffix_pattern.match(key)
+            if match:
+                suffix_str = match.group(1)
+                field_name = match.group(2).lower()
+                suffix = int(suffix_str) if suffix_str else None
+
+                if suffix not in suffix_vars:
+                    suffix_vars[suffix] = {}
+                suffix_vars[suffix][field_name] = value
+
+        # Build LLMProviderConfig for each suffix
+        for suffix, vars_dict in sorted(
+            suffix_vars.items(), key=lambda x: (x[0] is not None, x[0] or 0)
+        ):
+            # Map env var field names to LLMProviderConfig fields
+            config_data: Dict[str, Any] = {}
+            field_mapping = {
+                "model": "model",
+                "api_key": "api_key",
+                "api_base": "api_base",
+                "api_version": "api_version",
+                "vertex_credentials": "vertex_credentials",
+                "gcp_sa_json": "gcp_sa_json",
+                "vertex_project": "vertex_project",
+                "vertex_location": "vertex_location",
+            }
+
+            for env_field, config_field in field_mapping.items():
+                if env_field in vars_dict:
+                    value = vars_dict[env_field]
+                    # Handle JSON fields
+                    if config_field in ("vertex_credentials", "gcp_sa_json"):
+                        value = _coerce_service_account(value)
+                    config_data[config_field] = value
+
+            # Only add if model is configured
+            if config_data.get("model"):
+                config = LLMProviderConfig(**config_data)
+                deployments.append((suffix, config))
+
+        return deployments
+
+    def get_all_model_groups(self) -> List[str]:
+        """Return all known model group names."""
+        return ["multi_modal_pro", "multi_modal_fast", "text_fast"]
 
 
 class BuildSettings(BaseSettings):
@@ -190,6 +261,13 @@ class FeatureFlagSettings(BaseSettings):
             "ENABLE_CHAT_AUTO_SELECT", "FEATURE_FLAGS__ENABLE_CHAT_AUTO_SELECT"
         ),
     )
+    enable_chat_select_all: bool = Field(
+        default=False,
+        alias="ENABLE_CHAT_SELECT_ALL",
+        validation_alias=AliasChoices(
+            "ENABLE_CHAT_SELECT_ALL", "FEATURE_FLAGS__ENABLE_CHAT_SELECT_ALL"
+        ),
+    )
     serve_api_docs: bool = Field(
         default=False,
         alias="SERVE_API_DOCS",
@@ -199,6 +277,11 @@ class FeatureFlagSettings(BaseSettings):
         default=False,
         alias="DISABLE_SENTRY",
         validation_alias=AliasChoices("DISABLE_SENTRY", "FEATURE_FLAGS__DISABLE_SENTRY"),
+    )
+    webhooks_enabled: bool = Field(
+        default=False,
+        alias="ENABLE_WEBHOOKS",
+        validation_alias=AliasChoices("ENABLE_WEBHOOKS", "FEATURE_FLAGS__ENABLE_WEBHOOKS"),
     )
 
 
@@ -443,6 +526,9 @@ def get_settings() -> AppSettings:
         "httpx",
         "httpcore",
         "LiteLLM",
+        "LiteLLM Router",
+        "LiteLLM Proxy",
+        "litellm",
         "requests",
         "psycopg",
         "s3transfer",
@@ -450,5 +536,44 @@ def get_settings() -> AppSettings:
         "multipart",
     ]:
         logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    # Add a filter to redact sensitive credentials from any logs that slip through
+    class CredentialRedactingFilter(logging.Filter):
+        """Filter to redact sensitive credentials from log messages."""
+
+        import re
+
+        # Patterns for sensitive data
+        PATTERNS = [
+            # Redact entire vertex_credentials JSON blob (contains private key)
+            (re.compile(r"'vertex_credentials':\s*'[^']*'"), "'vertex_credentials': '[REDACTED]'"),
+            (re.compile(r'"vertex_credentials":\s*"[^"]*"'), '"vertex_credentials": "[REDACTED]"'),
+            # Individual sensitive fields
+            (re.compile(r'"private_key":\s*"[^"]*"'), '"private_key": "[REDACTED]"'),
+            (re.compile(r'"api_key":\s*"[^"]*"'), '"api_key": "[REDACTED]"'),
+            (re.compile(r'"password":\s*"[^"]*"'), '"password": "[REDACTED]"'),
+            (re.compile(r"'private_key':\s*'[^']*'"), "'private_key': '[REDACTED]'"),
+            (re.compile(r"'api_key':\s*'[^']*'"), "'api_key': '[REDACTED]'"),
+            (re.compile(r"-----BEGIN PRIVATE KEY-----.*?-----END PRIVATE KEY-----", re.DOTALL), "[REDACTED_PRIVATE_KEY]"),
+        ]
+
+        def filter(self, record: logging.LogRecord) -> bool:
+            if record.msg:
+                msg = str(record.msg)
+                for pattern, replacement in self.PATTERNS:
+                    msg = pattern.sub(replacement, msg)
+                record.msg = msg
+            if record.args:
+                args = []
+                for arg in record.args:
+                    if isinstance(arg, str):
+                        for pattern, replacement in self.PATTERNS:
+                            arg = pattern.sub(replacement, arg)
+                    args.append(arg)
+                record.args = tuple(args)
+            return True
+
+    # Apply the filter to the root logger to catch all logs
+    logging.getLogger().addFilter(CredentialRedactingFilter())
 
     return settings

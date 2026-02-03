@@ -11,7 +11,10 @@ import {
 	IconSearch,
 	IconSparkles,
 } from "@tabler/icons-react";
+import { analytics } from "@/lib/analytics";
+import { AnalyticsEvents as events } from "@/lib/analyticsEvents";
 import type { ChatMode } from "@/lib/api";
+import { testId } from "@/lib/testUtils";
 import { MODE_COLORS } from "./ChatModeSelector";
 import { TemplatesModal } from "./TemplatesModal";
 import { quickAccessTemplates, Templates } from "./templates";
@@ -72,6 +75,9 @@ const SuggestionPill = ({
 				borderWidth: isOverview || isDeepDive ? 1 : undefined,
 			}}
 			onClick={onClick}
+			{...testId(
+				`chat-template-suggestion-${suggestion.label.toLowerCase().replace(/\s+/g, "-")}`,
+			)}
 		>
 			<Group gap={6} wrap="nowrap">
 				<Icon
@@ -96,6 +102,20 @@ export const ChatTemplatesMenu = ({
 	const [opened, { open, close }] = useDisclosure(false);
 	const [animateRef] = useAutoAnimate();
 
+	const handleTemplateSelect = (
+		template: { content: string; key: string },
+		isDynamic = false,
+	) => {
+		if (isDynamic) {
+			try {
+				analytics.trackEvent(events.DYNAMIC_TEMPLATE_USED);
+			} catch (error) {
+				console.warn("Analytics tracking failed:", error);
+			}
+		}
+		onTemplateSelect(template);
+	};
+
 	// Check if selected template is from modal (not in quick access)
 	const isModalTemplateSelected =
 		selectedTemplateKey &&
@@ -108,7 +128,7 @@ export const ChatTemplatesMenu = ({
 
 	return (
 		<>
-			<Stack gap="xs">
+			<Stack gap="xs" {...testId("chat-templates-menu")}>
 				{/* Single "Suggested" row with AI suggestions (colored) + static templates (gray) */}
 				<Group gap="xs" ref={animateRef}>
 					<Text size="sm" c="gray.6" fw={500}>
@@ -123,10 +143,13 @@ export const ChatTemplatesMenu = ({
 							chatMode={chatMode}
 							isSelected={selectedTemplateKey === suggestion.label}
 							onClick={() =>
-								onTemplateSelect({
-									content: suggestion.prompt,
-									key: suggestion.label,
-								})
+								handleTemplateSelect(
+									{
+										content: suggestion.prompt,
+										key: suggestion.label,
+									},
+									true, // isDynamic - track analytics for AI suggestions
+								)
 							}
 						/>
 					))}
@@ -146,11 +169,14 @@ export const ChatTemplatesMenu = ({
 											: "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
 									}`}
 									onClick={() =>
-										onTemplateSelect({
+										handleTemplateSelect({
 											content: template.content,
 											key: template.title,
 										})
 									}
+									{...testId(
+										`chat-template-static-${template.title.toLowerCase().replace(/\s+/g, "-")}`,
+									)}
 								>
 									<Text size="sm" c="gray.7">
 										{template.title}
@@ -165,7 +191,7 @@ export const ChatTemplatesMenu = ({
 							withBorder
 							className="cursor-pointer rounded-full border-gray-400 bg-gray-100 px-3 py-1"
 							onClick={() =>
-								onTemplateSelect({
+								handleTemplateSelect({
 									content: selectedModalTemplate.content,
 									key: selectedModalTemplate.title,
 								})
@@ -184,6 +210,7 @@ export const ChatTemplatesMenu = ({
 							radius="xl"
 							onClick={open}
 							className="border-gray-200"
+							{...testId("chat-templates-more-button")}
 						>
 							<IconDots size={18} />
 						</ActionIcon>

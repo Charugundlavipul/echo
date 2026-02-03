@@ -5,6 +5,9 @@ import { useInView } from "react-intersection-observer";
 import { useAnnouncementDrawer } from "@/components/announcement/hooks";
 import { useProcessedAnnouncements } from "@/components/announcement/hooks/useProcessedAnnouncements";
 import { useLanguage } from "@/hooks/useLanguage";
+import { analytics } from "@/lib/analytics";
+import { AnalyticsEvents as events } from "@/lib/analyticsEvents";
+import { testId } from "@/lib/testUtils";
 import { Drawer } from "../common/Drawer";
 import { AnnouncementDrawerHeader } from "./AnnouncementDrawerHeader";
 import { AnnouncementErrorState } from "./AnnouncementErrorState";
@@ -29,6 +32,11 @@ export const Announcements = () => {
 	useEffect(() => {
 		if (isOpen && !openedOnce) {
 			setOpenedOnce(true);
+			try {
+				analytics.trackEvent(events.ANNOUNCEMENT_CREATED);
+			} catch (error) {
+				console.warn("Analytics tracking failed:", error);
+			}
 		}
 	}, [isOpen, openedOnce]);
 
@@ -104,6 +112,7 @@ export const Announcements = () => {
 					maxWidth: "95%",
 				},
 			}}
+			{...testId("announcement-drawer")}
 		>
 			<Stack h="100%">
 				<ScrollArea className="flex-1">
@@ -116,7 +125,7 @@ export const Announcements = () => {
 						) : isLoading ? (
 							<AnnouncementSkeleton />
 						) : processedAnnouncements.length === 0 ? (
-							<Box p="md">
+							<Box p="md" {...testId("announcement-empty-state")}>
 								<Text c="dimmed" ta="center">
 									<Trans>No announcements available</Trans>
 								</Text>

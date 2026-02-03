@@ -8,8 +8,7 @@ import axios, {
 } from "axios";
 import { toast } from "@/components/common/Toaster";
 import { API_BASE_URL, USE_PARTICIPANT_ROUTER } from "@/config";
-import { directus, directusContent } from "./directus";
-import type { EchoPortalTutorial } from "./typesDirectusContent";
+import { directus } from "./directus";
 
 export const apiCommonConfig: CreateAxiosDefaults = {
 	baseURL: API_BASE_URL,
@@ -42,45 +41,6 @@ export const getParticipantConversationById = async (
 ) => {
 	return apiNoAuth.get<unknown, Conversation>(
 		`/participant/projects/${projectId}/conversations/${conversationId}`,
-	);
-};
-
-export const getParticipantTutorialCardsBySlug = async (slug: string) => {
-	return directusContent.request<EchoPortalTutorial[]>(
-		readItems("echo__portal_tutorial", {
-			deep: {
-				cards: {
-					_sort: "sort",
-				} as any,
-			},
-			fields: [
-				"id",
-				"slug",
-				"count(cards)",
-				{
-					cards: [
-						"id",
-						"sort",
-						{
-							echo__portal_tutorial_card_id: [
-								"id",
-								"user_confirmation_required",
-								"icon",
-								"link",
-								{
-									translations: ["*"],
-								},
-							],
-						},
-					],
-				},
-			],
-			filter: {
-				slug: {
-					_eq: slug,
-				},
-			},
-		}),
 	);
 };
 
@@ -938,16 +898,25 @@ export const getProjectChatContext = async (chatId: string) => {
 
 export const addChatContext = async (
 	chatId: string,
-	conversationId?: string,
-	auto_select_bool?: boolean,
+	options?: {
+		conversationId?: string;
+		auto_select_bool?: boolean;
+		select_all?: boolean;
+		project_id?: string;
+		tag_ids?: string[];
+		verified_only?: boolean;
+		search_text?: string;
+	},
 ) => {
-	return api.post<unknown, TProjectChatContext>(
-		`/chats/${chatId}/add-context`,
-		{
-			auto_select_bool: auto_select_bool,
-			conversation_id: conversationId,
-		},
-	);
+	return api.post<unknown, AddContextResponse>(`/chats/${chatId}/add-context`, {
+		auto_select_bool: options?.auto_select_bool,
+		conversation_id: options?.conversationId,
+		project_id: options?.project_id,
+		search_text: options?.search_text,
+		select_all: options?.select_all,
+		tag_ids: options?.tag_ids,
+		verified_only: options?.verified_only,
+	});
 };
 
 export const deleteChatContext = async (
@@ -969,6 +938,32 @@ export const lockConversations = async (chatId: string) => {
 	return api.post<unknown, TProjectChatContext>(
 		`/chats/${chatId}/lock-conversations`,
 	);
+};
+
+export const selectAllContext = async (
+	chatId: string,
+	projectId: string,
+	options?: {
+		tagIds?: string[];
+		verifiedOnly?: boolean;
+		searchText?: string;
+	},
+) => {
+	// Uses addChatContext with select_all=true
+	const response = await addChatContext(chatId, {
+		project_id: projectId,
+		search_text: options?.searchText,
+		select_all: true,
+		tag_ids: options?.tagIds,
+		verified_only: options?.verifiedOnly,
+	});
+	// Map to SelectAllContextResponse for backward compatibility
+	return {
+		added: response?.added ?? [],
+		context_limit_reached: response?.context_limit_reached ?? false,
+		skipped: response?.skipped ?? [],
+		total_processed: response?.total_processed ?? 0,
+	} satisfies SelectAllContextResponse;
 };
 
 export type ChatMode = "overview" | "deep_dive";
@@ -1240,4 +1235,95 @@ export const checkUnsubscribeStatus = async (
 	} catch (_error) {
 		throw new Error("No matching subscription found.");
 	}
+};
+
+// =============================================================================
+// Webhook API
+// =============================================================================
+
+export type WebhookEvent =
+	| "conversation.created"
+	| "conversation.transcribed"
+	| "conversation.summarized";
+
+export type WebhookStatus = "published" | "draft" | "archived";
+
+export interface Webhook {
+	id: string;
+	name: string | null;
+	url: string | null;
+	events: WebhookEvent[] | null;
+	status: WebhookStatus | null;
+	date_created: string | null;
+	date_updated: string | null;
+}
+
+export interface WebhookCreatePayload {
+	name: string;
+	url: string;
+	secret?: string;
+	events: WebhookEvent[];
+}
+
+export interface WebhookUpdatePayload {
+	name?: string;
+	url?: string;
+	secret?: string;
+	events?: WebhookEvent[];
+	status?: WebhookStatus;
+}
+
+export interface WebhookTestResult {
+	success: boolean;
+	status_code: number | null;
+	message: string;
+}
+
+export const getProjectWebhooks = async (
+	projectId: string,
+): Promise<Webhook[]> => {
+	const response = await api.get<unknown, Webhook[]>(
+		`/projects/${projectId}/webhooks`,
+	);
+	return response;
+};
+
+export const createProjectWebhook = async (
+	projectId: string,
+	payload: WebhookCreatePayload,
+): Promise<Webhook> => {
+	const response = await api.post<unknown, Webhook>(
+		`/projects/${projectId}/webhooks`,
+		payload,
+	);
+	return response;
+};
+
+export const updateProjectWebhook = async (
+	projectId: string,
+	webhookId: string,
+	payload: WebhookUpdatePayload,
+): Promise<Webhook> => {
+	const response = await api.patch<unknown, Webhook>(
+		`/projects/${projectId}/webhooks/${webhookId}`,
+		payload,
+	);
+	return response;
+};
+
+export const deleteProjectWebhook = async (
+	projectId: string,
+	webhookId: string,
+): Promise<void> => {
+	await api.delete(`/projects/${projectId}/webhooks/${webhookId}`);
+};
+
+export const testProjectWebhook = async (
+	projectId: string,
+	webhookId: string,
+): Promise<WebhookTestResult> => {
+	const response = await api.post<unknown, WebhookTestResult>(
+		`/projects/${projectId}/webhooks/${webhookId}/test`,
+	);
+	return response;
 };
